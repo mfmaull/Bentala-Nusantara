@@ -83,8 +83,12 @@
       display: flex;
       flex-direction: column;
       gap: 12px;
-      transition: width .28s ease, transform .28s ease;
+
+      /* NEW */
+      overflow-y: auto;
+      overflow-x: hidden;
     }
+
 
     /* Make toolbox look glassy */
     #toolbox .glass {
@@ -369,6 +373,17 @@
         background-position: 200% 0;
       }
     }
+
+    /* Smooth fade for layer opacity */
+    .maplibregl-canvas,
+    .mapboxgl-canvas {
+      transition: opacity .35s ease-in-out !important;
+    }
+
+    #toolbox {
+      overflow-y: auto;
+      scrollbar-width: thin;
+    }
   </style>
 </head>
 
@@ -397,6 +412,7 @@
     </div>
 
     <!-- Layers -->
+    <!--Checkbox Layers-->
     <div class="panel">
       <div class="flex items-center justify-between">
         <div class="font-semibold">Layers</div>
@@ -407,6 +423,22 @@
         <label class="flex items-center gap-2"><input type="checkbox" id="heatmap-checkbox" />
           <span>Heatmap</span></label>
       </div>
+
+      <!--Opacity Layers-->
+      </br>
+      <div class="flex items-center justify-between">
+        <div class="font-semibold">Opacity</div>
+      </div>
+      <div class="mt-4">
+        <label class="text-sm font-semibold">Opacity Population Density</label>
+        <input id="opacity-density" type="range" min="0" max="100" value="50" class="w-full mt-1">
+      </div>
+
+      <div class="mt-4">
+        <label class="text-sm font-semibold">Opacity Heatmap</label>
+        <input id="opacity-heatmap" type="range" min="0" max="100" value="60" class="w-full mt-1">
+      </div>
+
     </div>
 
     <!-- Info -->
@@ -559,6 +591,7 @@
               id: 'kepadatan-penduduk',
               type: 'fill',
               source: 'kepadatan-src',
+              interactive: true,
               layout: { 'visibility': 'none' },
               paint: {
                 'fill-opacity': 0.5,
@@ -632,6 +665,61 @@
           kepadatanCheckbox.addEventListener('change', function () { map.setLayoutProperty('kepadatan-penduduk', 'visibility', this.checked ? 'visible' : 'none'); updateLegend(); });
           heatmapCheckbox.addEventListener('change', function () { const v = this.checked ? 'visible' : 'none'; map.setLayoutProperty(vs30PointsLayerId, 'visibility', v); map.setLayoutProperty('vs30-heatmap', 'visibility', v); updateLegend(); });
 
+          // === Opacity sliders ===
+          const opacityDensity = document.getElementById("opacity-density");
+          const opacityHeatmap = document.getElementById("opacity-heatmap");
+
+          // slider kepadatan
+          opacityDensity?.addEventListener("input", function () {
+            if (kepadatanCheckbox.checked) {
+              const val = Number(this.value) / 100;
+              map.setPaintProperty("kepadatan-penduduk", "fill-opacity", val);
+            }
+          });
+
+
+          // slider heatmap
+          opacityHeatmap?.addEventListener("input", function () {
+            if (heatmapCheckbox.checked) {
+              const val = Number(this.value) / 100;
+              map.setPaintProperty("vs30-heatmap", "heatmap-opacity", val);
+            }
+          });
+
+          // === Sync slider with checkbox ===
+            function syncOpacityControls() {
+              const d = document.getElementById("opacity-density");
+              const h = document.getElementById("opacity-heatmap");
+
+              // kepadatan
+              if (!kepadatanCheckbox.checked) {
+                d.disabled = true;
+                map.setPaintProperty("kepadatan-penduduk", "fill-opacity", 0);
+              } else {
+                d.disabled = false;
+                const val = Number(d.value) / 100;
+                map.setPaintProperty("kepadatan-penduduk", "fill-opacity", val);
+              }
+
+              // heatmap
+              if (!heatmapCheckbox.checked) {
+                h.disabled = true;
+                map.setPaintProperty("vs30-heatmap", "heatmap-opacity", 0);
+              } else {
+                h.disabled = false;
+                const val = Number(h.value) / 100;
+                map.setPaintProperty("vs30-heatmap", "heatmap-opacity", val);
+              }
+            }
+
+            // panggil setelah perubahan checkbox
+            kepadatanCheckbox.addEventListener("change", syncOpacityControls);
+            heatmapCheckbox.addEventListener("change", syncOpacityControls);
+
+            // jalankan pertama kali saat load
+            syncOpacityControls();
+
+
           // fit bounds (preserved)
           try {
             const bbox = turf.bbox(data);
@@ -641,6 +729,38 @@
           // connect reset button
           const resetBtn = document.getElementById('reset-search-btn');
           if (resetBtn) resetBtn.addEventListener('click', resetSearch);
+
+          // === CLICK POPUP + HIGHLIGHT ===
+          map.on("click", "kepadatan-penduduk", (e) => {
+            const f = e.features?.[0];
+            if (!f) return;
+
+            const k = f.properties?.KECAMATAN;
+            if (!k) return;
+
+            addHighlight(k);
+
+            new maplibregl.Popup()
+              .setLngLat(e.lngLat)
+              .setHTML(`
+                <div style="font-size:14px">
+                  <strong>${k}</strong><br>
+                  Desa: ${f.properties.DESA || "-"}<br>
+                  Kelurahan: ${f.properties.KELURAHAN || "-"}<br>
+                  VS30: ${f.properties.vs30_avg || "N/A"}<br>
+                  Kepadatan: ${f.properties.kepadatan || "N/A"}
+                </div>
+              `)
+              .addTo(map);
+          });
+
+          // pointer change when hover
+          map.on("mouseenter", "kepadatan-penduduk", () => {
+            map.getCanvas().style.cursor = "pointer";
+          });
+          map.on("mouseleave", "kepadatan-penduduk", () => {
+            map.getCanvas().style.cursor = "";
+          });
 
           // after layers added, we can mark dataLoaded
           dataLoaded = true;
@@ -795,6 +915,7 @@
         source: 'highlight-source',
         paint: { 'line-color': '#003300', 'line-width': 2 }
       });
+
       // fit to feature
       try { const bbox = turf.bbox(feature); if (bbox) map.fitBounds(bbox, { padding: 50, duration: 800, maxZoom: 14 }); } catch (e) { console.warn(e); }
       displayFeatureInfo(feature);
